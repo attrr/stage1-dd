@@ -1,0 +1,23 @@
+# Ignore everything
+*
+
+# Allow directories to be traversed
+!*/
+
+# Only track these extensions
+!*.md
+!*.nix
+!*.lock
+!*.sh
+!*.go
+!*.py
+!*.pyi
+!go.sum
+!go.mod
+!.gitignore
+!LICENSE
+!.github/**
+
+# Always ignore these directories
+docs/
+archive/
