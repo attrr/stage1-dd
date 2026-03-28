@@ -191,6 +191,11 @@ func forceReboot() {
 // commandWatchdog implements `failover watchdog`:
 // Runs as a systemd service on the main system.
 func (cli *CLI) commandWatchdog() error {
+	if sent, _ := daemon.SdNotify(false, daemon.SdNotifyReady); !sent {
+		log.Println("WARNING: Failed to send READY=1 to systemd. Is Type=notify configured?")
+	}
+	defer daemon.SdNotify(false, daemon.SdNotifyStopping)
+
 	cfg := cli.cfg
 	// check markers
 	hasMarker, err := cli.markers.HasAnyMarker()
@@ -199,8 +204,6 @@ func (cli *CLI) commandWatchdog() error {
 	}
 	if !hasMarker {
 		fmt.Println("No markers found. System is safe.")
-		daemon.SdNotify(false, daemon.SdNotifyReady)
-		daemon.SdNotify(false, daemon.SdNotifyStopping)
 		return nil
 	}
 
@@ -218,9 +221,6 @@ func (cli *CLI) commandWatchdog() error {
 	if err := cli.bootloader.Override(); err != nil {
 		log.Printf("failed to set rescue one-shot: %v", err)
 	}
-	if sent, _ := daemon.SdNotify(false, daemon.SdNotifyReady); !sent {
-		log.Println("WARNING: Failed to send READY=1 to systemd. Is Type=notify configured?")
-	}
 
 	log.Printf("Shutdown in %d seconds...\n", cfg.WatchdogTimeoutSec)
 	for {
@@ -228,7 +228,6 @@ func (cli *CLI) commandWatchdog() error {
 		case <-sigs:
 			log.Println("Received SIGTERM. system is stable.")
 			// Confirm should clear oneshot here
-			daemon.SdNotify(false, daemon.SdNotifyStopping)
 			return nil
 
 		case <-heartbeat.C:

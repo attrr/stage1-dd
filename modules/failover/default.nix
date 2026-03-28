@@ -13,22 +13,18 @@ let
   };
 
   cfg = config.services.failover;
-
-  # resolve value from config
-  efiMount = config.boot.loader.efi.efiSysMountPoint;
-  sdbootEnabled = config.boot.loader.systemd-boot.enable;
-  grubEnabled = config.boot.loader.grub.enable;
-  bootloader = if sdbootEnabled then "systemd-boot" else "grub";
+  loader = config.boot.loader;
+  bootloader = if loader.systemd-boot.enable then "systemd-boot" else "grub";
 
   # resolve bootloader specific dir
   rescueEntryName = "stage1-dd-rescue";
-  rescueEntryID = if sdbootEnabled then rescueEntryName + ".conf" else rescueEntryName;
-  rescueBaseDir = "stage-dd";
-  rescueDir = if sdbootEnabled then "${efiMount}/${rescueBaseDir}" else "/boot/${rescueBaseDir}";
+  rescueEntryID = if loader.systemd-boot.enable then rescueEntryName + ".conf" else rescueEntryName;
 
   # resolve artifacts placement location
+  rescueDir = "stage1-dd";
   rescueKernelPath = "${rescueDir}/vmlinuz-rescue";
   rescueInitrdPath = "${rescueDir}/initramfs-rescue";
+
   rescueKernelParams = lib.concatStringsSep " " cfg.rescue.kernelParams;
   markerDir = "/var/lib/failover";
 
@@ -63,6 +59,13 @@ let
   };
 
   derivedRescueSystem = evaluatedStage0.config.system.build.rescue;
+  failoverConfig = builtins.toJSON {
+      bootloader_type = bootloader;
+      esp_path = loader.efi.efiSysMountPoint;
+      rescue_entry_id = rescueEntryID;
+      marker_dir = markerDir;
+      watchdog_timeout_sec = cfg.watchdogTimeoutSec;
+    };
 in
 {
   options.services.failover = {
@@ -135,97 +138,84 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable (
-    lib.mkMerge [
-      {
-        # prepare environment
-        environment.systemPackages = [ failoverPkg ];
-        environment.etc."failover/config.json".text = builtins.toJSON {
-          bootloader_type = bootloader;
-          esp_path = efiMount;
-          rescue_entry_id = rescueEntryID;
-          marker_dir = markerDir;
-          watchdog_timeout_sec = cfg.watchdogTimeoutSec;
-        };
+  config = lib.mkIf cfg.enable {
+    # prepare environment
+    environment.systemPackages = [ failoverPkg ];
+    environment.etc."failover/config.json".text = failoverConfig;
 
-        system.activationScripts.failover-install = ''
-          mkdir -p ${rescueDir}
-          cp -f ${derivedRescueSystem}/bzImage ${rescueKernelPath}
-          cp -f ${derivedRescueSystem}/initrd  ${rescueInitrdPath}
+    # SDBOOT
+    boot.loader.systemd-boot = lib.mkIf loader.systemd-boot.enable {
+      extraFiles = {
+        "${rescueInitrdPath}" = derivedRescueSystem + "/initrd";
+        "${rescueKernelPath}" = derivedRescueSystem + "/bzImage";
+      };
+      extraEntries = {
+        "${rescueEntryID}" = ''
+          title NixOS Rescue (stage1-dd)
+          linux ${rescueKernelPath}
+          initrd ${rescueInitrdPath}
+          options ${rescueKernelParams}
         '';
+      };
+    };
 
-        # SDBOOT
-        boot.loader.systemd-boot.extraEntries = lib.mkIf sdbootEnabled (
-          let
-            mkRelativePath = path: (lib.removePrefix efiMount path);
-          in
-          {
-            "${rescueEntryID}" = ''
-              title NixOS Rescue (stage1-dd)
-              linux ${mkRelativePath rescueKernelPath}
-              initrd ${mkRelativePath rescueInitrdPath}
-              options ${rescueKernelParams}
-            '';
-          }
-        );
+    boot.loader.grub = lib.mkIf loader.grub.enable {
+      default = "saved";
+      extraFiles = {
+        "${rescueInitrdPath}" = derivedRescueSystem + "/initrd";
+        "${rescueKernelPath}" = derivedRescueSystem + "/bzImage";
+      };
+      extraConfig = ''
+        function savedefault {
+          true
+        }
+      '';
+      extraEntries = ''
+        menuentry "${rescueEntryID}" {
+          linux  @bootRoot@/${rescueKernelPath} ${rescueKernelParams}
+          initrd @bootRoot@/${rescueInitrdPath}
+        }
+      '';
+    };
 
-        # Hardware Watchdog, If kernel or PID 1 hangs, hardware watchdog forces power-cycle after 60s
-        systemd.settings.Manager.RuntimeWatchdogSec = "60s";
-        systemd.services.failover-watchdog = {
-          description = "Failover Watchdog";
-          wantedBy = [ "multi-user.target" ];
-          path = lib.optional grubEnabled pkgs.grub2;
-          after = [
-            "network.target"
-            "sshd.service"
-          ];
-          unitConfig = {
-            FailureAction = "force-reboot";
-          };
-          serviceConfig = {
-            Type = "notify";
-            ExecStart = "${failoverPkg}/bin/failover watchdog";
-            WatchdogSec = "10s";
-            # never auto-restart this, watchdog down means system unavaliable
-            Restart = "no";
-          };
-        };
+    # Hardware Watchdog, If kernel or PID 1 hangs, hardware watchdog forces power-cycle after 60s
+    systemd.settings.Manager.RuntimeWatchdogSec = "60s";
+    systemd.services.failover-watchdog = {
+      description = "Failover Watchdog";
+      wantedBy = [ "multi-user.target" ];
+      path = lib.optional loader.grub.enable pkgs.grub2;
+      after = [
+        "network.target"
+        "sshd.service"
+      ];
+      unitConfig = {
+        FailureAction = "force-reboot";
+      };
+      serviceConfig = {
+        Type = "notify";
+        ExecStart = "${failoverPkg}/bin/failover watchdog";
+        WatchdogSec = "10s";
+        # never auto-restart this, watchdog down means system unavaliable
+        Restart = "no";
+      };
+    };
 
-        systemd.tmpfiles.rules = [ "d ${markerDir} 0755 root root" ];
+    systemd.tmpfiles.rules = [ "d ${markerDir} 0755 root root" ];
 
-        # inject first-boot.marker
-        system.build.diskoImages.postInstallCommands = lib.mkIf (cfg.injectMethod == "disko") ''
-          mkdir -p $out${markerDir}
-          touch $out${markerDir}/first-boot.marker
-        '';
-        system.activationScripts.inject-firstboot-marker = lib.mkIf (cfg.injectMethod == "script") ''
-          DONE_MARKER="${markerDir}/.initialized"
+    # inject first-boot.marker
+    system.build.diskoImages.postInstallCommands = lib.mkIf (cfg.injectMethod == "disko") ''
+      mkdir -p $out${markerDir}
+      touch $out${markerDir}/first-boot.marker
+    '';
+    system.activationScripts.inject-firstboot-marker = lib.mkIf (cfg.injectMethod == "script") ''
+      DONE_MARKER="${markerDir}/.initialized"
 
-          if [ ! -f "$DONE_MARKER" ]; then
-            echo "First time boot: Initializing..."
-            mkdir -p ${markerDir}
-            touch ${markerDir}/first-boot.marker
-            touch "$DONE_MARKER"
-          fi
-        '';
-      }
-
-      (lib.mkIf grubEnabled {
-        # GRUB
-        boot.loader.grub.default = lib.mkIf grubEnabled "saved";
-        boot.loader.grub.extraConfig = lib.mkIf grubEnabled ''
-          function savedefault {
-            true
-          }
-        '';
-        boot.loader.grub.extraEntries = lib.mkIf grubEnabled ''
-          menuentry "${rescueEntryID}" {
-            linux  ${rescueKernelPath} ${rescueKernelParams}
-            initrd ${rescueInitrdPath}
-          }
-        '';
-      })
-    ]
-  );
-
+      if [ ! -f "$DONE_MARKER" ]; then
+        echo "First time boot: Initializing..."
+        mkdir -p ${markerDir}
+        touch ${markerDir}/first-boot.marker
+        touch "$DONE_MARKER"
+      fi
+    '';
+  };
 }
