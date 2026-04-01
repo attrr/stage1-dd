@@ -58,14 +58,14 @@ let
     ];
   };
 
-  derivedRescueSystem = evaluatedStage0.config.system.build.rescue;
+  derivedRescueSystem = evaluatedStage0.config.system.build.rescue-merged;
   failoverConfig = builtins.toJSON {
-      bootloader_type = bootloader;
-      esp_path = loader.efi.efiSysMountPoint;
-      rescue_entry_id = rescueEntryID;
-      marker_dir = markerDir;
-      watchdog_timeout_sec = cfg.watchdogTimeoutSec;
-    };
+    bootloader_type = bootloader;
+    esp_path = loader.efi.efiSysMountPoint;
+    rescue_entry_id = rescueEntryID;
+    marker_dir = markerDir;
+    watchdog_timeout_sec = cfg.watchdogTimeoutSec;
+  };
 in
 {
   options.services.failover = {
@@ -159,6 +159,7 @@ in
       };
     };
 
+    # GRUB
     boot.loader.grub = lib.mkIf loader.grub.enable {
       default = "saved";
       extraFiles = {

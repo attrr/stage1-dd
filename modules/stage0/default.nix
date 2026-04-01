@@ -91,14 +91,25 @@ let
     }
   ];
 
+  stage1SquashfsCpio =
+    pkgs.runCommand "stage1.squashfs"
+      {
+        nativeBuildInputs = [ pkgs.cpio ];
+      }
+      ''
+        mkdir -p target-root
+        cp ${squashfsFromInitrd} target-root/stage1.squashfs
+
+        cd target-root
+        find . -mindepth 1 -printf "%P\n" | cpio -o -H newc -R 0:0 > $out
+      '';
+
   # Merged mode: stage0 + squashfs in one cpio
   stage0MergedInitrd = pkgs.makeInitrdNG {
     inherit (config.boot.initrd) compressor compressorArgs;
-    contents = stage0BaseContents ++ [
-      {
-        source = squashfsFromInitrd;
-        target = "/stage1.squashfs";
-      }
+    contents = stage0BaseContents;
+    prepend = [
+      stage1SquashfsCpio
     ];
   };
 
@@ -144,7 +155,7 @@ in
     };
   };
 
-  config = {    
+  config = {
     # Stage0's kernel module requirements
     boot.kernelPackages = cfg.kernelPackages;
     boot.initrd.availableKernelModules = [
@@ -171,9 +182,22 @@ in
     system.build.rescue = pkgs.runCommand "stage1-squashfs" { } ''
       mkdir -p $out
       ln -s ${stage0MergedInitrd}/initrd $out/initrd
-      ln -s ${config.system.build.kernel}/${config.system.boot.loader.kernelFile} $out/bzImage      
+      ln -s ${config.system.build.kernel}/${config.system.boot.loader.kernelFile} $out/bzImage
       ln -s ${config.system.build.stage0}/initrd $out/stage0.initrd
-      ln -s ${squashfsFromInitrd} $out/stage1.squashfs      
+      ln -s ${squashfsFromInitrd} $out/stage1.squashfs
+    '';
+
+    system.build.rescue-merged = pkgs.runCommand "stage1-merged" { } ''
+      mkdir -p $out
+      ln -s ${stage0MergedInitrd}/initrd $out/initrd
+      ln -s ${config.system.build.kernel}/${config.system.boot.loader.kernelFile} $out/bzImage
+    '';
+
+    system.build.rescue-split = pkgs.runCommand "stage1-split" { } ''
+      mkdir -p $out
+      ln -s ${config.system.build.kernel}/${config.system.boot.loader.kernelFile} $out/bzImage
+      ln -s ${config.system.build.stage0}/initrd $out/stage0.initrd
+      ln -s ${squashfsFromInitrd} $out/stage1.squashfs
     '';
 
     system.stateVersion = lib.trivial.release;
