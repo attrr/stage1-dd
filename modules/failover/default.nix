@@ -218,5 +218,6 @@ in
         touch "$DONE_MARKER"
       fi
     '';
+    system.build.rescue = evaluatedStage0.config.system.build.rescue;
   };
 }
