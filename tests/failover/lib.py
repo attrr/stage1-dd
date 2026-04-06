@@ -114,7 +114,7 @@ def verify_init_result_in_main():
     machine.wait_for_unit("multi-user.target")
 
     # Wait for watchdog to start, confrm override
-    machine.wait_for_console_text("Started Failover Watchdog.")
+    machine.wait_for_unit("failover-watchdog.service")
     assert_status("failover status", "ARMED", "RESCUE", "RESCUE")
 
     # Final Confirm
