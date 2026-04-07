@@ -1,0 +1,23 @@
+name: 'Setup Nix'
+description: 'Install Nix with flakes and enable Magic Nix Cache'
+
+inputs:
+  nix-config:
+    description: 'Extra Nix configuration'
+    required: false
+    default: |
+      experimental-features = nix-command flakes
+      connect-timeout = 5
+      stalled-download-timeout = 30
+      download-attempts = 3
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      with:
+        extra-conf: ${{ inputs.nix-config }}
+
+    - name: Magic Nix Cache
+      uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
