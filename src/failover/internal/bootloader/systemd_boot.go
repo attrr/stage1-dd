@@ -105,17 +105,17 @@ func writeLoaderConf(path string, conf map[string]string, perm os.FileMode) erro
 }
 
 func fetchEntries(efivarPath string, entriesDir string) ([]string, error) {
-	// read entries from efivars
-	entries, err := readEFIVarSplitN(efivarPath, -1)
+	// read */boot/loader/entries/*
+	entries, err := fs.Glob(os.DirFS(entriesDir), "*.conf")
+	if err == nil && entries != nil {
+		return entries, nil
+	}
+	// fallback to read entries from efivars
+	entries, err = readEFIVarSplitN(efivarPath, -1)
 	if err == nil {
 		return entries, nil
 	}
-	// fallback to */boot/loader/entries/*
-	entries, err = fs.Glob(os.DirFS(entriesDir), "*.conf")
-	if err != nil || entries == nil {
-		return nil, fmt.Errorf("failed to fetch systemd-boot entries from dir")
-	}
-	return entries, err
+	return nil, fmt.Errorf("failed to fetch systemd-boot entries")
 }
 
 func findMainEntry(mainRegex regexp.Regexp, entries []string) (string, error) {
